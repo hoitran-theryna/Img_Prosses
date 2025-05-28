@@ -1,0 +1,2 @@
+ninja: Entering directory `C:\Users\DellLaps\Documents\Img_Prosses\sdk\.cxx\Debug\733a24b2\x86_64'
+ninja: no work to do.

@@ -21,4 +21,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Img_Prosses_FinalTest"
 include(":app")
- 
+include(":sdk")
