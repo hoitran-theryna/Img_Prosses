@@ -24,6 +24,7 @@ import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import kotlin.math.pow
 import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity() {
@@ -42,20 +43,22 @@ class MainActivity : ComponentActivity() {
         val noisyMat = mat.clone()
         val rows = mat.rows()
         val cols = mat.cols()
+        val channels = mat.channels()
         when (type) {
             "Gaussian" -> {
                 val noise = Mat(mat.size(), mat.type())
-                Core.randn(noise, 0.0, 30.0) // Mean = 0, StdDev = 30
+                Core.randn(noise, 0.0, 30.0)
                 Core.add(noisyMat, noise, noisyMat)
             }
             "Salt & Pepper" -> {
-                val noiseAmount = (rows * cols * 0.05).toInt() // 5% noise
+                val noiseAmount = (rows * cols * 0.05).toInt()
                 for (i in 0 until noiseAmount) {
                     val row = (Math.random() * rows).toInt()
                     val col = (Math.random() * cols).toInt()
-                    if (row < rows && col < cols) {
-                        val value = if (Math.random() > 0.5) 255.0 else 0.0
-                        noisyMat.submat(row, row + 1, col, col + 1).setTo(Scalar(value, value, value))
+                    val value = if (Math.random() > 0.5) 255.0 else 0.0
+                    val pixel = DoubleArray(channels) { value }
+                    if (row in 0 until rows && col in 0 until cols) {
+                        noisyMat.put(row, col, *pixel) // ✅ giải quyết lỗi ở đây
                     }
                 }
             }
@@ -63,130 +66,140 @@ class MainActivity : ComponentActivity() {
         return noisyMat
     }
 
-    private fun processImage(
-        mat: Mat,
-        func: String,
-        originalBitmap: Bitmap?,
-        sliderValue: Float
-    ): Bitmap {
+
+
+    private fun pointOperation(mat: Mat, type: String, param: Double): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+        val floatMat = Mat()
+        gray.convertTo(floatMat, CvType.CV_32F)
         val dst = Mat()
-        return when (func) {
-            "Original Image" -> originalBitmap ?: matToBitmap(mat)
-            "Lowpass Filtering" -> {
-                val kSize = ensureOddKernelSize(sliderValue.toInt())
-                Imgproc.blur(mat, dst, Size(kSize.toDouble(), kSize.toDouble()))
-                matToBitmap(dst)
+        when (type) {
+            "Negative" -> {
+                val inverted = Mat()
+                val white = Mat.ones(gray.size(), gray.type())
+                white.convertTo(white, gray.type(), 255.0)
+                Core.subtract(white, gray, inverted)
+                inverted.copyTo(dst)
             }
-            "Median Filter" -> {
-                val kSize = ensureOddKernelSize(sliderValue.toInt())
-                Imgproc.medianBlur(mat, dst, kSize)
-                matToBitmap(dst)
+            "Log" -> {
+                Core.add(floatMat, Scalar.all(1.0), floatMat)
+                Core.log(floatMat, floatMat)
+                Core.normalize(floatMat, floatMat, 0.0, 255.0, Core.NORM_MINMAX)
+                floatMat.convertTo(dst, CvType.CV_8U)
             }
-            "Highpass Filtering" -> {
-                val kSize = ensureOddKernelSize(sliderValue.toInt())
-                val blurred = Mat()
-                Imgproc.GaussianBlur(mat, blurred, Size(kSize.toDouble(), kSize.toDouble()), 0.0)
-                Core.subtract(mat, blurred, dst)
-                Core.add(dst, Scalar(128.0, 128.0, 128.0), dst)
-                matToBitmap(dst)
+            "Gamma" -> {
+                Core.pow(floatMat, param, floatMat)
+                Core.normalize(floatMat, floatMat, 0.0, 255.0, Core.NORM_MINMAX)
+                floatMat.convertTo(dst, CvType.CV_8U)
             }
-            "Robert Filter" -> {
-                val gray = Mat()
-                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-                val robertX = Mat()
-                val robertY = Mat()
-                val kernelX = Mat(2, 2, CvType.CV_32F)
-                kernelX.setTo(Scalar(0.0))
-                kernelX.row(0).col(0).setTo(Scalar(1.0))
-                kernelX.row(1).col(1).setTo(Scalar(-1.0))
-                val kernelY = Mat(2, 2, CvType.CV_32F)
-                kernelY.setTo(Scalar(0.0))
-                kernelY.row(0).col(1).setTo(Scalar(1.0))
-                kernelY.row(1).col(0).setTo(Scalar(-1.0))
-                Imgproc.filter2D(gray, robertX, CvType.CV_32F, kernelX)
-                Imgproc.filter2D(gray, robertY, CvType.CV_32F, kernelY)
-                Core.magnitude(robertX, robertY, dst)
-                Core.normalize(dst, dst, 0.0, 255.0, Core.NORM_MINMAX)
-                dst.convertTo(dst, CvType.CV_8U)
-                Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
-                matToBitmap(dst)
+            "Threshold" -> {
+                Imgproc.threshold(gray, dst, param, 255.0, Imgproc.THRESH_BINARY)
             }
-            "Laplacian Filter" -> {
-                val gray = Mat()
-                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-                Imgproc.Laplacian(gray, dst, CvType.CV_64F)
-                Core.convertScaleAbs(dst, dst)
-                Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
-                matToBitmap(dst)
-            }
-            "Frequency Lowpass Filter" -> {
-                val gray = Mat()
-                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-                val dft = Mat()
-                gray.convertTo(gray, CvType.CV_32F)
-                Core.dft(gray, dft, Core.DFT_COMPLEX_OUTPUT, 0)
-                val rows = dft.rows()
-                val cols = dft.cols()
-                val centerX = cols / 2
-                val centerY = rows / 2
-                val radius = sliderValue.toInt()
-                val zeroPixel = Scalar(0.0, 0.0)
-                for (i in 0 until rows) {
-                    for (j in 0 until cols) {
-                        val distance = sqrt(((i - centerY) * (i - centerY) + (j - centerX) * (j - centerX)).toDouble())
-                        if (distance > radius) {
-                            dft.submat(i, i + 1, j, j + 1).setTo(zeroPixel)
-                        }
+            else -> return mat
+        }
+        Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
+        return dst
+    }
+
+    private fun histogramEqualization(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+        val equalized = Mat()
+        Imgproc.equalizeHist(gray, equalized)
+        Imgproc.cvtColor(equalized, equalized, Imgproc.COLOR_GRAY2BGR)
+        return equalized
+    }
+    private fun applyCustomMedianFilter(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+        val dst = gray.clone()
+        for (i in 1 until gray.rows() - 1) {
+            for (j in 1 until gray.cols() - 1) {
+                val pixels = mutableListOf<Double>()
+                for (dx in -1..1) {
+                    for (dy in -1..1) {
+                        pixels.add(gray.get(i + dx, j + dy)[0])
                     }
                 }
-                Core.idft(dft, dst, Core.DFT_SCALE or Core.DFT_REAL_OUTPUT, 0)
-                Core.normalize(dst, dst, 0.0, 255.0, Core.NORM_MINMAX)
-                dst.convertTo(dst, CvType.CV_8U)
-                Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
-                matToBitmap(dst)
+                pixels.sort()
+                dst.put(i, j, pixels[4])
             }
-            "Blur (Filter)" -> {
-                val kSize = ensureOddKernelSize(sliderValue.toInt())
-                Imgproc.GaussianBlur(mat, dst, Size(kSize.toDouble(), kSize.toDouble()), 0.0)
-                matToBitmap(dst)
-            }
-            "Restoration (Dilation)" -> {
-                val kSize = ensureOddKernelSize(sliderValue.toInt())
-                val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(kSize.toDouble(), kSize.toDouble()))
-                Imgproc.dilate(mat, dst, kernel)
-                matToBitmap(dst)
-            }
-            "Edge Detection (Canny)" -> {
-                val threshold = sliderValue.toDouble()
-                val gray = Mat()
-                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-                Imgproc.Canny(gray, dst, threshold, threshold * 2)
-                Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
-                matToBitmap(dst)
-            }
-            "Object Detection (Contours)" -> {
-                val gray = Mat()
-                Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
-                Imgproc.GaussianBlur(gray, gray, Size(5.0, 5.0), 0.0)
-                Imgproc.Canny(gray, dst, 75.0, 200.0)
-                val contours = ArrayList<MatOfPoint>()
-                val hierarchy = Mat()
-                Imgproc.findContours(dst, contours, hierarchy, Imgproc.RETR_TREE, Imgproc.CHAIN_APPROX_SIMPLE)
-                val contourMat = mat.clone()
-                Imgproc.drawContours(contourMat, contours, -1, Scalar(255.0, 0.0, 0.0), 2)
-                matToBitmap(contourMat)
-            }
-            "Gaussian Noise" -> {
-                val noisyMat = addNoise(mat, "Gaussian")
-                matToBitmap(noisyMat)
-            }
-            "Salt & Pepper Noise" -> {
-                val noisyMat = addNoise(mat, "Salt & Pepper")
-                matToBitmap(noisyMat)
-            }
-            else -> matToBitmap(mat)
         }
+        Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
+        return dst
     }
+
+    private fun applyCustomLaplacianFilter(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+
+        val kernel = Mat(3, 3, CvType.CV_32F)
+        kernel.put(0, 0, floatArrayOf(
+            0f, 1f, 0f,
+            1f, -4f, 1f,
+            0f, 1f, 0f
+        ))
+
+        val dst = Mat()
+        Imgproc.filter2D(gray, dst, CvType.CV_8U, kernel)
+        Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
+        return dst
+    }
+
+
+    private fun applyRobertCross1(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+
+        val kernel = Mat(3, 3, CvType.CV_32F)
+        kernel.put(0, 0, floatArrayOf(
+            0f, 0f, 0f,
+            0f, -1f, 0f,
+            0f, 0f, 1f
+        ))
+
+        val dst = Mat()
+        Imgproc.filter2D(gray, dst, CvType.CV_8U, kernel)
+        Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
+        return dst
+    }
+
+
+    private fun applyRobertCross2(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+
+        val kernel = Mat(3, 3, CvType.CV_32F)
+        kernel.put(0, 0, floatArrayOf(
+            0f, 0f, 0f,
+            0f, 0f, -1f,
+            0f, 1f, 0f
+        ))
+
+        val dst = Mat()
+        Imgproc.filter2D(gray, dst, CvType.CV_8U, kernel)
+        Imgproc.cvtColor(dst, dst, Imgproc.COLOR_GRAY2BGR)
+        return dst
+    }
+
+
+    private fun applyRobertCombined(mat: Mat): Mat {
+        val gray = Mat()
+        Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
+        val r1 = applyRobertCross1(mat)
+        val r2 = applyRobertCross2(mat)
+        val r1Gray = Mat()
+        val r2Gray = Mat()
+        Imgproc.cvtColor(r1, r1Gray, Imgproc.COLOR_BGR2GRAY)
+        Imgproc.cvtColor(r2, r2Gray, Imgproc.COLOR_BGR2GRAY)
+        val combined = Mat()
+        Core.add(gray, r1Gray, combined)
+        Core.add(combined, r2Gray, combined)
+        Imgproc.cvtColor(combined, combined, Imgproc.COLOR_GRAY2BGR)
+        return combined
+    }
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -200,10 +213,10 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             Img_Prosses_FinalTestTheme {
-                var selectedFunction by remember { mutableStateOf("Original Image") }
+                var selectedFunction by remember { mutableStateOf("Ảnh gốc (Original Image)") }
                 var bitmap by remember { mutableStateOf<Bitmap?>(null) }
                 var matSrc by remember { mutableStateOf<Mat?>(null) }
-                var sliderValue by remember { mutableStateOf(15f) }
+                var sliderValue by remember { mutableStateOf(1.0f) }
                 val context = LocalContext.current
 
                 val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
@@ -222,46 +235,58 @@ class MainActivity : ComponentActivity() {
 
                 LaunchedEffect(selectedFunction, matSrc, sliderValue) {
                     matSrc?.let {
-                        bitmap = processImage(it, selectedFunction, bitmap, sliderValue)
+                        val processed = when (selectedFunction) {
+                            "Ảnh gốc (Original Image)" -> it
+                            "Âm bản (Negative)" -> pointOperation(it, "Negative", 0.0)
+                            "Biến đổi Log (Log Transformation)" -> pointOperation(it, "Log", 0.0)
+                            "Biến đổi Gamma (Gamma Transformation)" -> pointOperation(it, "Gamma", sliderValue.toDouble())
+                            "Nhị phân hóa (Global Thresholding)" -> pointOperation(it, "Threshold", sliderValue.toDouble())
+                            "Cân bằng Histogram (Histogram Equalization)" -> histogramEqualization(it)
+                            "Thêm nhiễu Gaussian (Gaussian Noise)" -> addNoise(it, "Gaussian")
+                            "Thêm nhiễu muối tiêu (Salt & Pepper Noise)" -> addNoise(it, "Salt & Pepper")
+                            "Lọc trung vị thủ công (Median Manual)" -> applyCustomMedianFilter(it)
+                            "Lọc Laplacian thủ công" -> applyCustomLaplacianFilter(it)
+                            "Robert hướng 1" -> applyRobertCross1(it)
+                            "Robert hướng 2" -> applyRobertCross2(it)
+                            "Robert tổng hợp" -> applyRobertCombined(it)
+                            else -> it
+                        }
+                        bitmap = matToBitmap(processed)
                     }
                 }
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Column(
-                        modifier = Modifier
-                            .padding(innerPadding)
-                            .padding(16.dp)
-                    ) {
-                        Text(text = "OpenCV Version: ${Core.VERSION}", style = MaterialTheme.typography.titleMedium)
+                    Column(modifier = Modifier.padding(innerPadding).padding(16.dp)) {
+                        Text("OpenCV Version: ${Core.VERSION}", style = MaterialTheme.typography.titleMedium)
                         Spacer(modifier = Modifier.height(10.dp))
 
                         Button(onClick = { launcher.launch("image/*") }) {
-                            Text("Select Image from Gallery")
+                            Text("Chọn ảnh từ thư viện")
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
 
                         if (bitmap != null) {
                             val options = listOf(
-                                "Original Image",
-                                "Lowpass Filtering",
-                                "Median Filter",
-                                "Highpass Filtering",
-                                "Robert Filter",
-                                "Laplacian Filter",
-                                "Frequency Lowpass Filter",
-                                "Blur (Filter)",
-                                "Restoration (Dilation)",
-                                "Edge Detection (Canny)",
-                                "Object Detection (Contours)",
-                                "Gaussian Noise",
-                                "Salt & Pepper Noise"
+                                "Ảnh gốc (Original Image)",
+                                "Âm bản (Negative)",
+                                "Biến đổi Log (Log Transformation)",
+                                "Biến đổi Gamma (Gamma Transformation)",
+                                "Nhị phân hóa (Global Thresholding)",
+                                "Cân bằng Histogram (Histogram Equalization)",
+                                "Thêm nhiễu Gaussian (Gaussian Noise)",
+                                "Thêm nhiễu muối tiêu (Salt & Pepper Noise)",
+                                "Lọc trung vị thủ công (Median Manual)",
+                                "Lọc Laplacian thủ công",
+                                "Robert hướng 1",
+                                "Robert hướng 2",
+                                "Robert tổng hợp"
                             )
 
                             var expanded by remember { mutableStateOf(false) }
                             Box {
                                 Text(
-                                    text = "Function: $selectedFunction",
+                                    text = "Kỹ thuật xử lý: $selectedFunction",
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable { expanded = true }
@@ -287,32 +312,23 @@ class MainActivity : ComponentActivity() {
 
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            if (selectedFunction != "Original Image" &&
-                                selectedFunction != "Object Detection (Contours)" &&
-                                selectedFunction != "Gaussian Noise" &&
-                                selectedFunction != "Salt & Pepper Noise") {
-                                Text("Adjust Parameter", style = MaterialTheme.typography.labelLarge)
+                            if (selectedFunction.contains("Gamma") || selectedFunction.contains("Threshold")) {
+                                Text("Điều chỉnh tham số", style = MaterialTheme.typography.labelLarge)
                                 Slider(
                                     value = sliderValue,
                                     onValueChange = { sliderValue = it },
-                                    valueRange = when (selectedFunction) {
-                                        "Blur (Filter)", "Restoration (Dilation)", "Lowpass Filtering", "Median Filter", "Highpass Filtering" -> 1f..49f
-                                        "Edge Detection (Canny)" -> 10f..300f
-                                        "Frequency Lowpass Filter" -> 10f..100f
-                                        else -> 1f..100f
-                                    },
+                                    valueRange = 0.1f..5.0f,
                                     steps = 20
                                 )
-                                Text("Value: ${sliderValue.toInt()}")
-                                Spacer(modifier = Modifier.height(10.dp))
+                                Text("Giá trị: ${sliderValue}")
                             }
+
+                            Spacer(modifier = Modifier.height(10.dp))
 
                             Image(
                                 bitmap = bitmap!!.asImageBitmap(),
                                 contentDescription = null,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(400.dp)
+                                modifier = Modifier.fillMaxWidth().height(400.dp)
                             )
                         }
                     }
