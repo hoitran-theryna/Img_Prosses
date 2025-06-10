@@ -1,33 +1,50 @@
 package com.example.img_prosses_finaltest
 
+import android.Manifest
+import android.content.ContentValues
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.img_prosses_finaltest.ui.theme.Img_Prosses_FinalTestTheme
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import java.io.IOException
 import kotlin.math.*
 
 class MainActivity : ComponentActivity() {
-
+    // Existing image processing functions remain unchanged
     private fun matToBitmap(mat: Mat): Bitmap {
         val bmp = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(mat, bmp)
@@ -107,7 +124,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Simple Thresholding (dựa trên trang 2-3 của tài liệu TH#34)
     private fun applyGlobalThreshold(mat: Mat, threshold: Double, inverse: Boolean = false): Mat {
         val gray = Mat()
         Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -118,10 +134,8 @@ class MainActivity : ComponentActivity() {
         return result
     }
 
-    // Adaptive Thresholding (sửa lỗi dựa trên trang 4-5 của tài liệu TH#34)
     private fun applyAdaptiveThreshold(mat: Mat, method: String = "mean", ksize: Int = 11, c: Int = 4): Mat {
         try {
-            // Đảm bảo ksize là số lẻ và >= 3
             val validKsize = if (ksize % 2 == 0) ksize + 1 else maxOf(3, ksize)
             val gray = Mat()
             Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -134,12 +148,10 @@ class MainActivity : ComponentActivity() {
             return result
         } catch (e: Exception) {
             Log.e("OpenCV", "Lỗi trong Adaptive Thresholding: ${e.message}")
-            // Trả về ảnh gốc nếu có lỗi
             return mat.clone()
         }
     }
 
-    // Otsu Thresholding (dựa trên trang 5-6 của tài liệu TH#34)
     private fun applyOtsuThreshold(mat: Mat): Mat {
         val gray = Mat()
         Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -151,7 +163,6 @@ class MainActivity : ComponentActivity() {
         return result
     }
 
-    // Sobel Filter (dựa trên trang 7-8 của tài liệu TH#34)
     private fun applySobelFilter(mat: Mat): Mat {
         val gray = Mat()
         Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -169,7 +180,6 @@ class MainActivity : ComponentActivity() {
         return sobelCombined
     }
 
-    // Laplacian Filter (dựa trên trang 7-8 của tài liệu TH#34)
     private fun applyLaplacianFilter(mat: Mat): Mat {
         val gray = Mat()
         Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -181,7 +191,6 @@ class MainActivity : ComponentActivity() {
         return lap
     }
 
-    // Canny Edge Detection (dựa trên trang 8-9 của tài liệu TH#34)
     private fun applyCannyEdgeDetection(mat: Mat, threshold1: Double = 30.0, threshold2: Double = 150.0): Mat {
         val gray = Mat()
         Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -193,7 +202,6 @@ class MainActivity : ComponentActivity() {
         return canny
     }
 
-    // Draw Contours (dựa trên trang 2-4 của tài liệu TH#05)
     private fun drawContours(mat: Mat, threshold1: Double = 30.0, threshold2: Double = 150.0): Mat {
         try {
             val gray = Mat()
@@ -215,7 +223,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Number Contours (dựa trên trang 5-6 của tài liệu TH#05)
     private fun numberContours(mat: Mat, threshold1: Double = 30.0, threshold2: Double = 150.0): Mat {
         try {
             val gray = Mat()
@@ -239,7 +246,7 @@ class MainActivity : ComponentActivity() {
                         Point(cX.toDouble(), cY.toDouble()),
                         Imgproc.FONT_HERSHEY_SIMPLEX,
                         0.7,
-                        Scalar(255.0, 0.0, 0.0), // Blue color
+                        Scalar(255.0, 0.0, 0.0),
                         2
                     )
                 }
@@ -251,8 +258,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Contour Areas (dựa trên trang 6-8 của tài liệu TH#05)
-    private fun contourAreas(mat: Mat, threshold1: Double = 30.0, threshold2: Double = 150.0): Mat {
+    private fun contourAreas(mat: Mat, threshold1: Double = 150.0, threshold2: Double = 150.0): Mat {
         try {
             val gray = Mat()
             Imgproc.cvtColor(mat, gray, Imgproc.COLOR_BGR2GRAY)
@@ -276,7 +282,7 @@ class MainActivity : ComponentActivity() {
                         Point((cX - 20).toDouble(), cY.toDouble()),
                         Imgproc.FONT_HERSHEY_SIMPLEX,
                         0.5,
-                        Scalar(0.0, 255.0, 0.0), // Green color
+                        Scalar(0.0, 255.0, 0.0),
                         2
                     )
                 }
@@ -288,7 +294,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Bounding Boxes (dựa trên trang 9-11 của tài liệu TH#05)
     private fun drawBoundingBoxes(mat: Mat, threshold1: Double = 30.0, threshold2: Double = 150.0): Mat {
         try {
             val gray = Mat()
@@ -307,7 +312,7 @@ class MainActivity : ComponentActivity() {
                     result,
                     Point(rect.x.toDouble(), rect.y.toDouble()),
                     Point((rect.x + rect.width).toDouble(), (rect.y + rect.height).toDouble()),
-                    Scalar(0.0, 255.0, 0.0), // Green color
+                    Scalar(0.0, 255.0, 0.0),
                     2
                 )
             }
@@ -336,7 +341,7 @@ class MainActivity : ComponentActivity() {
         Core.copyMakeBorder(gray, padded, h, h, h, h, Core.BORDER_REFLECT)
         for (i in h until gray.rows() + h) {
             for (j in h until gray.cols() + h) {
-                val region = padded.submat(i - h, i + h + 1, j - h, j + h + 1) // Xóa dấu ) thừa
+                val region = padded.submat(i - h, i + h + 1, j - h, j + h + 1)
                 val logRegion = Mat()
                 region.convertTo(logRegion, CvType.CV_32F)
                 Core.log(logRegion, logRegion)
@@ -551,11 +556,40 @@ class MainActivity : ComponentActivity() {
         return result
     }
 
+    private fun saveImageToGallery(bitmap: Bitmap): Boolean {
+        val context = this
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "ProcessedImage_${System.currentTimeMillis()}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ImageProcessing")
+        }
+
+        try {
+            val uri = context.contentResolver.insert(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                contentValues
+            )
+            uri?.let {
+                context.contentResolver?.openOutputStream(it)?.use { outputStream ->
+                    bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+                }
+                return true
+            }
+        } catch (e: IOException) {
+            Log.e("SaveImage", "Error saving image: ${e.message}")
+        }
+        return false
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        if (!OpenCVLoader.initDebug()) Log.e("OpenCV", "Failed to load OpenCV")
-        else Log.d("OpenCV", "OpenCV loaded successfully. Version: ${Core.VERSION}")
+        if (!OpenCVLoader.initDebug()) {
+            Log.e("OpenCV", "Failed to load OpenCV")
+        } else {
+            Log.d("OpenCV", "OpenCV loaded successfully. Version: ${Core.VERSION}")
+        }
 
         setContent {
             Img_Prosses_FinalTestTheme {
@@ -566,11 +600,11 @@ class MainActivity : ComponentActivity() {
                 var qValue by remember { mutableStateOf(1.5f) }
                 var d0 by remember { mutableStateOf(60.0f) }
                 var nValue by remember { mutableStateOf(2.0f) }
-                var thresholdValue by remember { mutableStateOf(155.0f) } // Mặc định T=155 từ TH#34
-                var threshold1 by remember { mutableStateOf(30.0f) } // Mặc định cho Canny
-                var threshold2 by remember { mutableStateOf(150.0f) } // Mặc định cho Canny
-                var adaptiveKsize by remember { mutableStateOf(11f) } // Mặc định ksize=11 từ TH#34
-                var adaptiveC by remember { mutableStateOf(4f) } // Mặc định C=4 từ TH#34
+                var thresholdValue by remember { mutableStateOf(155.0f) }
+                var threshold1 by remember { mutableStateOf(30.0f) }
+                var threshold2 by remember { mutableStateOf(150.0f) }
+                var adaptiveKsize by remember { mutableStateOf(11f) }
+                var adaptiveC by remember { mutableStateOf(4f) }
                 var rotationAngle by remember { mutableStateOf(0f) }
                 var cropStartX by remember { mutableStateOf(30f) }
                 var cropStartY by remember { mutableStateOf(120f) }
@@ -578,8 +612,10 @@ class MainActivity : ComponentActivity() {
                 var cropHeight by remember { mutableStateOf(215f) }
                 var showSplit by remember { mutableStateOf(false) }
                 var adaptiveMethod by remember { mutableStateOf("mean") }
+                var snackbarMessage by remember { mutableStateOf<String?>(null) }
 
                 val context = LocalContext.current
+                val snackbarHostState = remember { SnackbarHostState() }
 
                 val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
                     uri?.let {
@@ -595,6 +631,27 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+                val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+                    if (isGranted) {
+                        bitmap?.let {
+                            if (saveImageToGallery(it)) {
+                                snackbarMessage = "Image saved to gallery"
+                            } else {
+                                snackbarMessage = "Failed to save image"
+                            }
+                        }
+                    } else {
+                        snackbarMessage = "Storage permission denied"
+                    }
+                }
+
+                LaunchedEffect(snackbarMessage) {
+                    snackbarMessage?.let {
+                        snackbarHostState.showSnackbar(it)
+                        snackbarMessage = null
+                    }
+                }
+
                 LaunchedEffect(selectedFunction, matSrc, d0, nValue, rotationAngle, cropStartX, cropStartY, cropWidth, cropHeight, thresholdValue, threshold1, threshold2, adaptiveKsize, adaptiveC, adaptiveMethod) {
                     matSrc?.let {
                         val processed = when (selectedFunction) {
@@ -606,10 +663,10 @@ class MainActivity : ComponentActivity() {
                             "Sobel Filter" -> applySobelFilter(it)
                             "Laplacian Filter" -> applyLaplacianFilter(it)
                             "Canny Edge Detection" -> applyCannyEdgeDetection(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Draw Contours" -> drawContours(it, threshold1.toDouble(), threshold2.toDouble()) // TH#05
-                            "Number Contours" -> numberContours(it, threshold1.toDouble(), threshold2.toDouble()) // TH#05
-                            "Contour Areas" -> contourAreas(it, threshold1.toDouble(), threshold2.toDouble()) // TH#05
-                            "Bounding Boxes" -> drawBoundingBoxes(it, threshold1.toDouble(), threshold2.toDouble()) // TH#05
+                            "Draw Contours" -> drawContours(it, threshold1.toDouble(), threshold2.toDouble())
+                            "Number Contours" -> numberContours(it, threshold1.toDouble(), threshold2.toDouble())
+                            "Contour Areas" -> contourAreas(it, threshold1.toDouble(), threshold2.toDouble())
+                            "Bounding Boxes" -> drawBoundingBoxes(it, threshold1.toDouble(), threshold2.toDouble())
                             "Ideal Lowpass Filter (ILPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "ideal"))
                             "Butterworth Lowpass Filter (BLPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "butterworth", nValue.toDouble()))
                             "Gaussian Lowpass Filter (GLPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "gaussian"))
@@ -641,165 +698,404 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
-                    Column(modifier = Modifier.padding(padding).padding(16.dp)) {
-                        Text("OpenCV Version: ${Core.VERSION}", style = MaterialTheme.typography.titleMedium)
-                        Spacer(modifier = Modifier.height(10.dp))
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    topBar = {
+                        TopAppBar(
+                            title = {
+                                Text(
+                                    "Image Processing Studio",
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                            },
+                            colors = TopAppBarDefaults.topAppBarColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                titleContentColor = MaterialTheme.colorScheme.onPrimary
+                            )
+                        )
+                    },
+                    floatingActionButton = {
+                        FloatingActionButton(
+                            onClick = { launcher.launch("image/*") },
+                            containerColor = MaterialTheme.colorScheme.secondary,
+                            contentColor = MaterialTheme.colorScheme.onSecondary,
+                            modifier = Modifier.shadow(8.dp, RoundedCornerShape(16.dp))
+                        ) {
+                            Text("Chọn ảnh", fontWeight = FontWeight.Medium)
+                        }
+                    },
+                    snackbarHost = { SnackbarHost(snackbarHostState) }
+                ) { padding ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(padding)
+                            .padding(horizontal = 16.dp)
+                            .verticalScroll(rememberScrollState())
+                            .background(MaterialTheme.colorScheme.background),
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 8.dp),
+                            elevation = CardDefaults.cardElevation(4.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    "OpenCV Version: ${Core.VERSION}",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
 
-                        Button(onClick = { launcher.launch("image/*") }) {
-                            Text("Chọn ảnh từ thư viện")
+                                val options = listOf(
+                                    "Ảnh gốc (Original Image)",
+                                    "Simple Thresholding",
+                                    "Simple Thresholding (Inverse)",
+                                    "Adaptive Thresholding",
+                                    "Otsu Thresholding",
+                                    "Sobel Filter",
+                                    "Laplacian Filter",
+                                    "Canny Edge Detection",
+                                    "Draw Contours",
+                                    "Number Contours",
+                                    "Contour Areas",
+                                    "Bounding Boxes",
+                                    "Ideal Lowpass Filter (ILPF)",
+                                    "Butterworth Lowpass Filter (BLPF)",
+                                    "Gaussian Lowpass Filter (GLPF)",
+                                    "Ideal Highpass Filter (IHPF)",
+                                    "Butterworth Highpass Filter (BHPF)",
+                                    "Gaussian Highpass Filter (GHPF)",
+                                    "Gaussian Noise",
+                                    "Salt & Pepper Noise",
+                                    "Rayleigh Noise",
+                                    "Erlang Noise",
+                                    "Exponential Noise",
+                                    "Uniform Noise",
+                                    "Arithmetic Mean Filter",
+                                    "Geometric Mean Filter",
+                                    "Harmonic Mean Filter",
+                                    "Contraharmonic Mean Filter",
+                                    "Histogram Equalization",
+                                    "Contrast Stretching",
+                                    "Dịch ảnh (Translation)",
+                                    "Xoay ảnh (Rotation)",
+                                    "Co dãn ảnh (Scaling)",
+                                    "Lật ảnh (Flipping)",
+                                    "Cắt ảnh (Cropping)",
+                                    "Tách kênh màu (Split Channels)"
+                                )
+
+                                var expanded by remember { mutableStateOf(false) }
+                                ExposedDropdownMenuBox(
+                                    expanded = expanded,
+                                    onExpandedChange = { expanded = !expanded }
+                                ) {
+                                    OutlinedTextField(
+                                        value = selectedFunction,
+                                        onValueChange = {},
+                                        label = { Text("Kỹ thuật xử lý") },
+                                        trailingIcon = {
+                                            ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                                        },
+                                        readOnly = true,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .menuAnchor()
+                                            .clip(RoundedCornerShape(8.dp))
+                                    )
+                                    ExposedDropdownMenu(
+                                        expanded = expanded,
+                                        onDismissRequest = { expanded = false },
+                                        modifier = Modifier
+                                            .background(MaterialTheme.colorScheme.surface)
+                                            .animateContentSize(animationSpec = tween(300))
+                                    ) {
+                                        options.forEach { option ->
+                                            DropdownMenuItem(
+                                                text = { Text(option, style = MaterialTheme.typography.bodyMedium) },
+                                                onClick = {
+                                                    selectedFunction = option
+                                                    expanded = false
+                                                },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .padding(horizontal = 8.dp)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                if (bitmap != null) {
+                                    Button(
+                                        onClick = {
+                                            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                                                permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                                            } else {
+                                                if (saveImageToGallery(bitmap!!)) {
+                                                    snackbarMessage = "Image saved to gallery"
+                                                } else {
+                                                    snackbarMessage = "Failed to save image"
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(48.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = MaterialTheme.colorScheme.primary
+                                        )
+                                    ) {
+                                        Text("Lưu ảnh", fontWeight = FontWeight.Medium)
+                                    }
+                                }
+                            }
                         }
 
-                        Spacer(modifier = Modifier.height(20.dp))
-
                         if (bitmap != null) {
-                            val options = listOf(
-                                "Ảnh gốc (Original Image)",
-                                "Simple Thresholding",
-                                "Simple Thresholding (Inverse)",
-                                "Adaptive Thresholding",
-                                "Otsu Thresholding",
-                                "Sobel Filter",
-                                "Laplacian Filter",
-                                "Canny Edge Detection",
-                                "Draw Contours", // TH#05
-                                "Number Contours", // TH#05
-                                "Contour Areas", // TH#05
-                                "Bounding Boxes", // TH#05
-                                "Ideal Lowpass Filter (ILPF)",
-                                "Butterworth Lowpass Filter (BLPF)",
-                                "Gaussian Lowpass Filter (GLPF)",
-                                "Ideal Highpass Filter (IHPF)",
-                                "Butterworth Highpass Filter (BHPF)",
-                                "Gaussian Highpass Filter (GHPF)",
-                                "Gaussian Noise",
-                                "Salt & Pepper Noise",
-                                "Rayleigh Noise",
-                                "Erlang Noise",
-                                "Exponential Noise",
-                                "Uniform Noise",
-                                "Arithmetic Mean Filter",
-                                "Geometric Mean Filter",
-                                "Harmonic Mean Filter",
-                                "Contraharmonic Mean Filter",
-                                "Histogram Equalization",
-                                "Contrast Stretching",
-                                "Dịch ảnh (Translation)",
-                                "Xoay ảnh (Rotation)",
-                                "Co dãn ảnh (Scaling)",
-                                "Lật ảnh (Flipping)",
-                                "Cắt ảnh (Cropping)",
-                                "Tách kênh màu (Split Channels)"
-                            )
-
-                            var expanded by remember { mutableStateOf(false) }
-                            Box {
-                                Text("Kỹ thuật xử lý: $selectedFunction", modifier = Modifier.fillMaxWidth().clickable { expanded = true }.padding(12.dp))
-                                DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                                    options.forEach { option ->
-                                        DropdownMenuItem(text = { Text(option) }, onClick = {
-                                            selectedFunction = option
-                                            expanded = false
-                                        })
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                elevation = CardDefaults.cardElevation(4.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    if (showSplit && matSrc != null) {
+                                        val images = splitChannels(matSrc!!)
+                                        images.forEachIndexed { index, img ->
+                                            Column {
+                                                Text(
+                                                    when (index) {
+                                                        0 -> "Red Channel"
+                                                        1 -> "Green Channel"
+                                                        2 -> "Blue Channel"
+                                                        else -> ""
+                                                    },
+                                                    style = MaterialTheme.typography.titleSmall,
+                                                    color = MaterialTheme.colorScheme.primary
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Image(
+                                                    bitmap = img.asImageBitmap(),
+                                                    contentDescription = null,
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .height(150.dp)
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .background(Color.Black.copy(alpha = 0.1f))
+                                                )
+                                            }
+                                        }
+                                    } else {
+                                        Image(
+                                            bitmap = bitmap!!.asImageBitmap(),
+                                            contentDescription = null,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(400.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color.Black.copy(alpha = 0.1f))
+                                        )
                                     }
                                 }
                             }
 
-                            if (selectedFunction == "Xoay ảnh (Rotation)") {
-                                Text("Góc xoay: ${rotationAngle.toInt()}°")
-                                Slider(value = rotationAngle, onValueChange = { rotationAngle = it }, valueRange = 0f..180f)
-                            }
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                elevation = CardDefaults.cardElevation(4.dp),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    if (selectedFunction == "Xoay ảnh (Rotation)") {
+                                        SliderWithLabel(
+                                            label = "Góc xoay: ${rotationAngle.toInt()}°",
+                                            value = rotationAngle,
+                                            onValueChange = { rotationAngle = it },
+                                            valueRange = 0f..180f
+                                        )
+                                    }
 
-                            if (selectedFunction == "Cắt ảnh (Cropping)") {
-                                Text("Start X: ${cropStartX.toInt()}")
-                                Slider(value = cropStartX, onValueChange = { cropStartX = it }, valueRange = 0f..(matSrc?.cols()?.toFloat() ?: 100f))
-                                Text("Start Y: ${cropStartY.toInt()}")
-                                Slider(value = cropStartY, onValueChange = { cropStartY = it }, valueRange = 0f..(matSrc?.rows()?.toFloat() ?: 100f))
-                                Text("Width: ${cropWidth.toInt()}")
-                                Slider(value = cropWidth, onValueChange = { cropWidth = it }, valueRange = 1f..(matSrc?.cols()?.toFloat() ?: 100f))
-                                Text("Height: ${cropHeight.toInt()}")
-                                Slider(value = cropHeight, onValueChange = { cropHeight = it }, valueRange = 1f..(matSrc?.rows()?.toFloat() ?: 100f))
-                            }
+                                    if (selectedFunction == "Cắt ảnh (Cropping)") {
+                                        SliderWithLabel(
+                                            label = "Start X: ${cropStartX.toInt()}",
+                                            value = cropStartX,
+                                            onValueChange = { cropStartX = it },
+                                            valueRange = 0f..(matSrc?.cols()?.toFloat() ?: 100f)
+                                        )
+                                        SliderWithLabel(
+                                            label = "Start Y: ${cropStartY.toInt()}",
+                                            value = cropStartY,
+                                            onValueChange = { cropStartY = it },
+                                            valueRange = 0f..(matSrc?.rows()?.toFloat() ?: 100f)
+                                        )
+                                        SliderWithLabel(
+                                            label = "Width: ${cropWidth.toInt()}",
+                                            value = cropWidth,
+                                            onValueChange = { cropWidth = it },
+                                            valueRange = 1f..(matSrc?.cols()?.toFloat() ?: 100f)
+                                        )
+                                        SliderWithLabel(
+                                            label = "Height: ${cropHeight.toInt()}",
+                                            value = cropHeight,
+                                            onValueChange = { cropHeight = it },
+                                            valueRange = 50f..(matSrc?.rows()?.toFloat() ?: 50f)
+                                        )
+                                    }
 
-                            if (selectedFunction == "Adaptive Thresholding") {
-                                Text("Phương pháp: $adaptiveMethod")
-                                Row {
-                                    Button(onClick = { adaptiveMethod = "mean" }) { Text("Mean") }
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Button(onClick = { adaptiveMethod = "gaussian" }) { Text("Gaussian") }
+                                    if (selectedFunction == "Adaptive Thresholding") {
+                                        Text(
+                                            "Phương pháp: $adaptiveMethod",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                onClick = { adaptiveMethod = "mean" },
+                                                modifier = Modifier.weight(1f),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = if (adaptiveMethod == "mean") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                                                )
+                                            ) {
+                                                Text("Mean")
+                                            }
+                                            Button(
+                                                onClick = { adaptiveMethod = "gaussian" },
+                                                modifier = Modifier.weight(1f),
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = if (adaptiveMethod == "gaussian") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary
+                                                )
+                                            ) {
+                                                Text("Gaussian")
+                                            }
+                                        }
+                                        SliderWithLabel(
+                                            label = "Kích thước vùng: ${adaptiveKsize.toInt()}",
+                                            value = adaptiveKsize,
+                                            onValueChange = { adaptiveKsize = (it.toInt() / 2 * 2 + 1).toFloat() },
+                                            valueRange = 3f..21f,
+                                            steps = 8
+                                        )
+                                        SliderWithLabel(
+                                            label = "Hằng số C: ${adaptiveC.toInt()}",
+                                            value = adaptiveC,
+                                            onValueChange = { adaptiveC = it },
+                                            valueRange = 0f..10f
+                                        )
+                                    }
+
+                                    if (selectedFunction == "Simple Thresholding" || selectedFunction == "Simple Thresholding (Inverse)") {
+                                        SliderWithLabel(
+                                            label = "Ngưỡng T: ${thresholdValue.toInt()}",
+                                            value = thresholdValue,
+                                            onValueChange = { thresholdValue = it },
+                                            valueRange = 0f..255f
+                                        )
+                                    }
+
+                                    if (selectedFunction == "Canny Edge Detection" || selectedFunction == "Draw Contours" || selectedFunction == "Number Contours" || selectedFunction == "Contour Areas" || selectedFunction == "Bounding Boxes") {
+                                        SliderWithLabel(
+                                            label = "Threshold 1: ${threshold1.toInt()}",
+                                            value = threshold1,
+                                            onValueChange = { threshold1 = it },
+                                            valueRange = 0f..255f
+                                        )
+                                        SliderWithLabel(
+                                            label = "Threshold 2: ${threshold2.toInt()}",
+                                            value = threshold2,
+                                            onValueChange = { threshold2 = it },
+                                            valueRange = 0f..255f
+                                        )
+                                    }
+
+                                    if (selectedFunction == "Contrast Stretching") {
+                                        SliderWithLabel(
+                                            label = "r1: ${threshold1.toInt()}",
+                                            value = threshold1,
+                                            onValueChange = { threshold1 = it },
+                                            valueRange = 0f..255f
+                                        )
+                                        SliderWithLabel(
+                                            label = "s1: ${thresholdValue.toInt()}",
+                                            value = thresholdValue,
+                                            onValueChange = { thresholdValue = it },
+                                            valueRange = 0f..255f
+                                        )
+                                        SliderWithLabel(
+                                            label = "r2: ${threshold2.toInt()}",
+                                            value = threshold2,
+                                            onValueChange = { threshold2 = it },
+                                            valueRange = 0f..255f
+                                        )
+                                        SliderWithLabel(
+                                            label = "s2: ${(adaptiveC * 255).toInt()}",
+                                            value = adaptiveC,
+                                            onValueChange = { adaptiveC = it },
+                                            valueRange = 0f..1f
+                                        )
+                                    }
+
+                                    if (selectedFunction.contains("Filter") && !selectedFunction.contains("Lowpass") && !selectedFunction.contains("Highpass") && !selectedFunction.contains("Sobel") && !selectedFunction.contains("Laplacian") && !selectedFunction.contains("Canny")) {
+                                        SliderWithLabel(
+                                            label = "Kích thước bộ lọc: ${ksize.toInt()}x${ksize.toInt()}",
+                                            value = ksize,
+                                            onValueChange = { ksize = it },
+                                            valueRange = 3f..9f,
+                                            steps = 3
+                                        )
+                                    }
+
+                                    if (selectedFunction.contains("Contraharmonic")) {
+                                        SliderWithLabel(
+                                            label = "Q (bậc lọc): ${qValue}",
+                                            value = qValue,
+                                            onValueChange = { qValue = it },
+                                            valueRange = -2f..3f
+                                        )
+                                    }
+
+                                    if (selectedFunction.contains("Lowpass") || selectedFunction.contains("Highpass")) {
+                                        SliderWithLabel(
+                                            label = "D₀ (Cutoff Frequency): ${d0.toInt()}",
+                                            value = d0,
+                                            onValueChange = { d0 = it },
+                                            valueRange = 1f..200f
+                                        )
+                                        if (selectedFunction.contains("Butterworth")) {
+                                            SliderWithLabel(
+                                                label = "n (Order): ${nValue}",
+                                                value = nValue,
+                                                onValueChange = { nValue = it },
+                                                valueRange = 1f..10f
+                                            )
+                                        }
+
+
+                                        if (selectedFunction.contains("Noise")) {
+                                            SliderWithLabel(
+                                                label = "Tham số: ${d0.toInt()}",
+                                                value = d0,
+                                                onValueChange = { d0 = it },
+                                                valueRange = 1f..100f
+                                            )
+                                        }
+                                    }
                                 }
-                                Text("Kích thước vùng: ${adaptiveKsize.toInt()}")
-                                Slider(
-                                    value = adaptiveKsize,
-                                    onValueChange = { adaptiveKsize = (it.toInt() / 2 * 2 + 1).toFloat() }, // Đảm bảo số lẻ
-                                    valueRange = 3f..21f,
-                                    steps = 8 // Các giá trị: 3, 5, 7, 9, 11, 13, 15, 17, 19, 21
-                                )
-                                Text("Hằng số C: ${adaptiveC.toInt()}")
-                                Slider(value = adaptiveC, onValueChange = { adaptiveC = it }, valueRange = 0f..10f)
-                            }
-
-                            if (showSplit && matSrc != null) {
-                                val images = splitChannels(matSrc!!)
-                                images.forEachIndexed { index, img ->
-                                    Text(when (index) {
-                                        0 -> "Red Channel"
-                                        1 -> "Green Channel"
-                                        2 -> "Blue Channel"
-                                        else -> ""
-                                    })
-                                    Image(bitmap = img.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxWidth().height(150.dp))
-                                    Spacer(modifier = Modifier.height(8.dp))
-                                }
-                            } else if (bitmap != null) {
-                                Image(bitmap = bitmap!!.asImageBitmap(), contentDescription = null, modifier = Modifier.fillMaxWidth().height(400.dp))
-                            }
-
-                            if (selectedFunction == "Simple Thresholding" || selectedFunction == "Simple Thresholding (Inverse)") {
-                                Text("Ngưỡng T: ${thresholdValue.toInt()}")
-                                Slider(value = thresholdValue, onValueChange = { thresholdValue = it }, valueRange = 0f..255f)
-                            }
-
-                            if (selectedFunction == "Canny Edge Detection" || selectedFunction == "Draw Contours" || selectedFunction == "Number Contours" || selectedFunction == "Contour Areas" || selectedFunction == "Bounding Boxes") {
-                                Text("Threshold 1: ${threshold1.toInt()}")
-                                Slider(value = threshold1, onValueChange = { threshold1 = it }, valueRange = 0f..255f)
-                                Text("Threshold 2: ${threshold2.toInt()}")
-                                Slider(value = threshold2, onValueChange = { threshold2 = it }, valueRange = 0f..255f)
-                            }
-
-                            if (selectedFunction == "Contrast Stretching") {
-                                Text("r1: ${threshold1.toInt()}")
-                                Slider(value = threshold1, onValueChange = { threshold1 = it }, valueRange = 0f..255f)
-                                Text("s1: ${thresholdValue.toInt()}")
-                                Slider(value = thresholdValue, onValueChange = { thresholdValue = it }, valueRange = 0f..255f)
-                                Text("r2: ${threshold2.toInt()}")
-                                Slider(value = threshold2, onValueChange = { threshold2 = it }, valueRange = 0f..255f)
-                                Text("s2: ${(adaptiveC * 255).toInt()}")
-                                Slider(value = adaptiveC, onValueChange = { adaptiveC = it }, valueRange = 0f..1f)
-                            }
-
-                            if (selectedFunction.contains("Filter") && !selectedFunction.contains("Lowpass") && !selectedFunction.contains("Highpass") && !selectedFunction.contains("Sobel") && !selectedFunction.contains("Laplacian") && !selectedFunction.contains("Canny")) {
-                                Text("Kích thước bộ lọc: ${ksize.toInt()}x${ksize.toInt()}")
-                                Slider(value = ksize, onValueChange = { ksize = it }, valueRange = 3f..9f, steps = 3)
-                            }
-
-                            if (selectedFunction.contains("Contraharmonic")) {
-                                Text("Q (bậc lọc): ${qValue}")
-                                Slider(value = qValue, onValueChange = { qValue = it }, valueRange = -2f..3f)
-                            }
-
-                            if (selectedFunction.contains("Lowpass") || selectedFunction.contains("Highpass")) {
-                                Text("D₀ (Cutoff Frequency): ${d0.toInt()}")
-                                Slider(value = d0, onValueChange = { d0 = it }, valueRange = 1f..200f)
-                                if (selectedFunction.contains("Butterworth")) {
-                                    Text("n (Order): ${nValue}")
-                                    Slider(value = nValue, onValueChange = { nValue = it }, valueRange = 1f..10f)
-                                }
-                            }
-
-                            if (selectedFunction.contains("Noise")) {
-                                Text("Tham số: ${d0.toInt()}")
-                                Slider(value = d0, onValueChange = { d0 = it }, valueRange = 1f..100f)
                             }
                         }
                     }
@@ -807,4 +1103,32 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-}
+
+    @Composable
+    fun SliderWithLabel(
+        label: String,
+        value: Float,
+        onValueChange: (Float) -> Unit,
+        valueRange: ClosedFloatingPointRange<Float>,
+        steps: Int = 0
+    ) {
+        Column {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Slider(
+                value = value,
+                onValueChange = onValueChange,
+                valueRange = valueRange,
+                steps = steps,
+                modifier = Modifier.fillMaxWidth(),
+                colors = SliderDefaults.colors(
+                    thumbColor = MaterialTheme.colorScheme.primary,
+                    activeTrackColor = MaterialTheme.colorScheme.primary
+                )
+            )
+        }
+    }
+    }
