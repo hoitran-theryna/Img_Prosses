@@ -2,23 +2,26 @@ package com.example.img_prosses_finaltest
 
 import android.Manifest
 import android.content.ContentValues
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.pdf.PdfDocument
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresApi
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -36,15 +39,19 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.img_prosses_finaltest.ui.theme.Img_Prosses_FinalTestTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
+import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import kotlin.math.*
 
 class MainActivity : ComponentActivity() {
-    // Existing image processing functions remain unchanged
     private fun matToBitmap(mat: Mat): Bitmap {
         val bmp = Bitmap.createBitmap(mat.cols(), mat.rows(), Bitmap.Config.ARGB_8888)
         Utils.matToBitmap(mat, bmp)
@@ -556,6 +563,163 @@ class MainActivity : ComponentActivity() {
         return result
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
+    fun savePdfToDownloads(context: Context, bitmap: Bitmap) {
+        val pdfDocument = PdfDocument()
+        val pageInfo = PdfDocument.PageInfo.Builder(bitmap.width, bitmap.height, 1).create()
+        val page = pdfDocument.startPage(pageInfo)
+        page.canvas.drawBitmap(bitmap, 0f, 0f, null)
+        pdfDocument.finishPage(page)
+
+        val filename = "Image_${System.currentTimeMillis()}.pdf"
+
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, filename)
+            put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+
+        val resolver = context.contentResolver
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+
+        uri?.let {
+            resolver.openOutputStream(it)?.use { outStream ->
+                pdfDocument.writeTo(outStream)
+            }
+
+            contentValues.clear()
+            contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+
+            Toast.makeText(context, "Đã lưu PDF vào Download/", Toast.LENGTH_LONG).show()
+        }
+
+        pdfDocument.close()
+    }
+
+    private fun scanDocument(src: Mat): Mat {
+        val img3 = Mat()
+        when (src.channels()) {
+            4 -> Imgproc.cvtColor(src, img3, Imgproc.COLOR_RGBA2BGR)
+            1 -> Imgproc.cvtColor(src, img3, Imgproc.COLOR_GRAY2BGR)
+            else -> src.copyTo(img3)
+        }
+
+        val limit = 1080.0
+        val maxDim = max(img3.rows(), img3.cols()).toDouble()
+        val img = if (maxDim > limit) {
+            Mat().also { Imgproc.resize(img3, it, Size(), limit / maxDim, limit / maxDim, Imgproc.INTER_LINEAR) }
+        } else {
+            img3.clone()
+        }
+        val orig = img.clone()
+
+        val kernel = Imgproc.getStructuringElement(Imgproc.MORPH_RECT, Size(5.0, 5.0))
+        Imgproc.morphologyEx(img, img, Imgproc.MORPH_CLOSE, kernel, Point(-1.0, -1.0), 3)
+
+        val mask = Mat.zeros(img.size(), CvType.CV_8UC1)
+        val bgdModel = Mat.zeros(1, 65, CvType.CV_64F)
+        val fgdModel = Mat.zeros(1, 65, CvType.CV_64F)
+        val rect = Rect(20, 20, img.cols() - 40, img.rows() - 40)
+        Imgproc.grabCut(img, mask, rect, bgdModel, fgdModel, 5, Imgproc.GC_INIT_WITH_RECT)
+
+        val mask2 = Mat()
+        Core.compare(mask, Scalar(Imgproc.GC_PR_FGD.toDouble()), mask2, Core.CMP_EQ)
+        val fg = Mat(img.size(), img.type(), Scalar(0.0, 0.0, 0.0))
+        img.copyTo(fg, mask2)
+
+        val gray = Mat().also { Imgproc.cvtColor(fg, it, Imgproc.COLOR_BGR2GRAY) }
+        Imgproc.GaussianBlur(gray, gray, Size(11.0, 11.0), 0.0)
+        val edges = Mat()
+        Imgproc.Canny(gray, edges, 50.0, 200.0)
+        Imgproc.dilate(edges, edges, Imgproc.getStructuringElement(Imgproc.MORPH_ELLIPSE, Size(5.0, 5.0)))
+
+        val contours = ArrayList<MatOfPoint>()
+        Imgproc.findContours(edges, contours, Mat(), Imgproc.RETR_LIST, Imgproc.CHAIN_APPROX_SIMPLE)
+        val top5 = contours.sortedByDescending { Imgproc.contourArea(it) }.take(5)
+        var quad: List<Point>? = null
+        for (c in top5) {
+            val approx = MatOfPoint2f()
+            Imgproc.approxPolyDP(
+                MatOfPoint2f(*c.toArray()),
+                approx,
+                0.02 * Imgproc.arcLength(MatOfPoint2f(*c.toArray()), true),
+                true
+            )
+            if (approx.total() == 4L) {
+                quad = approx.toArray().toList()
+                break
+            }
+        }
+        if (quad == null) {
+            return orig
+        }
+
+        val ordered = run {
+            val sum = quad.map { it.x + it.y }
+            val diff = quad.map { it.y - it.x }
+            val tl = quad[sum.indexOf(sum.minOrNull()!!)]
+            val br = quad[sum.indexOf(sum.maxOrNull()!!)]
+            val tr = quad[diff.indexOf(diff.minOrNull()!!)]
+            val bl = quad[diff.indexOf(diff.maxOrNull()!!)]
+            listOf(tl, tr, br, bl)
+        }
+
+        val (tl, tr, br, bl) = ordered
+        val widthA = hypot(br.x - bl.x, br.y - bl.y)
+        val widthB = hypot(tr.x - tl.x, tr.y - tl.y)
+        val maxWidth = max(widthA, widthB).toInt()
+        val heightA = hypot(tr.x - br.x, tr.y - br.y)
+        val heightB = hypot(tl.x - bl.x, tl.y - bl.y)
+        val maxHeight = max(heightA, heightB).toInt()
+        val dstPts = MatOfPoint2f(
+            Point(0.0, 0.0),
+            Point(maxWidth.toDouble(), 0.0),
+            Point(maxWidth.toDouble(), maxHeight.toDouble()),
+            Point(0.0, maxHeight.toDouble())
+        )
+        val srcPts = MatOfPoint2f(*ordered.toTypedArray())
+
+        val M = Imgproc.getPerspectiveTransform(srcPts, dstPts)
+        val scanned = Mat()
+        Imgproc.warpPerspective(orig, scanned, M, Size(maxWidth.toDouble(), maxHeight.toDouble()))
+
+        return scanned
+    }
+
+    private fun orderPoints(pts: List<Point>): List<Point> {
+        val rect = Array(4) { Point() }
+        val sum = pts.map { it.x + it.y }
+        rect[0] = pts[sum.indexOf(sum.minOrNull()!!)]    // top-left
+        rect[2] = pts[sum.indexOf(sum.maxOrNull()!!)]    // bottom-right
+
+        val diff = pts.map { it.y - it.x }
+        rect[1] = pts[diff.indexOf(diff.minOrNull()!!)]  // top-right
+        rect[3] = pts[diff.indexOf(diff.maxOrNull()!!)]  // bottom-left
+
+        return rect.toList()
+    }
+
+    private fun getDestinationPoints(srcPts: List<Point>): List<Point> {
+        val (tl, tr, br, bl) = srcPts
+        val widthA = hypot(br.x - bl.x, br.y - bl.y)
+        val widthB = hypot(tr.x - tl.x, tr.y - tl.y)
+        val maxWidth = max(widthA, widthB).toInt()
+
+        val heightA = hypot(tr.x - br.x, tr.y - br.y)
+        val heightB = hypot(tl.x - bl.x, tl.y - bl.y)
+        val maxHeight = max(heightA, heightB).toInt()
+
+        return orderPoints(
+            listOf(
+                Point(0.0, 0.0),
+                Point(maxWidth.toDouble(), 0.0),
+                Point(maxWidth.toDouble(), maxHeight.toDouble()),
+                Point(0.0, maxHeight.toDouble())
+            )
+        )
+    }
+
     private fun saveImageToGallery(bitmap: Bitmap): Boolean {
         val context = this
         val contentValues = ContentValues().apply {
@@ -581,6 +745,7 @@ class MainActivity : ComponentActivity() {
         return false
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -613,9 +778,43 @@ class MainActivity : ComponentActivity() {
                 var showSplit by remember { mutableStateOf(false) }
                 var adaptiveMethod by remember { mutableStateOf("mean") }
                 var snackbarMessage by remember { mutableStateOf<String?>(null) }
-
+                var isLoading by remember { mutableStateOf(false) } // Loading state
                 val context = LocalContext.current
+                var capturedImageUri by remember { mutableStateOf<Uri?>(null) }
+
+                val cameraLauncher = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+                    if (success && capturedImageUri != null) {
+                        try {
+                            val inputStream = context.contentResolver.openInputStream(capturedImageUri!!)
+                            val bmp = BitmapFactory.decodeStream(inputStream)
+                            inputStream?.close()
+                            bmp?.let {
+                                bitmap = it
+                                val mat = Mat()
+                                Utils.bitmapToMat(it, mat)
+                                matSrc = mat
+                            }
+                        } catch (e: Exception) {
+                            Log.e("CameraCapture", "Lỗi đọc ảnh: ${e.message}")
+                        }
+                    }
+                }
+                val takePicture = {
+                    val contentValues = ContentValues().apply {
+                        put(MediaStore.Images.Media.DISPLAY_NAME, "Captured_${System.currentTimeMillis()}.jpg")
+                        put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                        put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/ImageProcessing")
+                    }
+
+                    capturedImageUri = context.contentResolver.insert(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        contentValues
+                    )
+
+                    capturedImageUri?.let { cameraLauncher.launch(it) }
+                }
                 val snackbarHostState = remember { SnackbarHostState() }
+                val coroutineScope = rememberCoroutineScope() // Coroutine scope
 
                 val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
                     uri?.let {
@@ -652,49 +851,85 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                LaunchedEffect(selectedFunction, matSrc, d0, nValue, rotationAngle, cropStartX, cropStartY, cropWidth, cropHeight, thresholdValue, threshold1, threshold2, adaptiveKsize, adaptiveC, adaptiveMethod) {
-                    matSrc?.let {
-                        val processed = when (selectedFunction) {
-                            "Ảnh gốc (Original Image)" -> it
-                            "Simple Thresholding" -> applyGlobalThreshold(it, thresholdValue.toDouble())
-                            "Simple Thresholding (Inverse)" -> applyGlobalThreshold(it, thresholdValue.toDouble(), true)
-                            "Adaptive Thresholding" -> applyAdaptiveThreshold(it, adaptiveMethod, adaptiveKsize.toInt(), adaptiveC.toInt())
-                            "Otsu Thresholding" -> applyOtsuThreshold(it)
-                            "Sobel Filter" -> applySobelFilter(it)
-                            "Laplacian Filter" -> applyLaplacianFilter(it)
-                            "Canny Edge Detection" -> applyCannyEdgeDetection(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Draw Contours" -> drawContours(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Number Contours" -> numberContours(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Contour Areas" -> contourAreas(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Bounding Boxes" -> drawBoundingBoxes(it, threshold1.toDouble(), threshold2.toDouble())
-                            "Ideal Lowpass Filter (ILPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "ideal"))
-                            "Butterworth Lowpass Filter (BLPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "butterworth", nValue.toDouble()))
-                            "Gaussian Lowpass Filter (GLPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), false, "gaussian"))
-                            "Ideal Highpass Filter (IHPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), true, "ideal"))
-                            "Butterworth Highpass Filter (BHPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), true, "butterworth", nValue.toDouble()))
-                            "Gaussian Highpass Filter (GHPF)" -> applyFrequencyFilter(it, createDistanceFilter(Core.getOptimalDFTSize(it.rows() * 2), Core.getOptimalDFTSize(it.cols() * 2), d0.toDouble(), true, "gaussian"))
-                            "Gaussian Noise" -> addGaussianNoise(it, d0.toDouble())
-                            "Salt & Pepper Noise" -> addSaltPepperNoise(it, d0 / 100.0)
-                            "Rayleigh Noise" -> addRayleighNoise(it, d0.toDouble())
-                            "Erlang Noise" -> addErlangNoise(it, 2, d0.toDouble())
-                            "Exponential Noise" -> addExponentialNoise(it, d0.toDouble())
-                            "Uniform Noise" -> addUniformNoise(it, 0.0, d0.toDouble())
-                            "Arithmetic Mean Filter" -> arithmeticMeanFilter(it, ksize.toInt())
-                            "Geometric Mean Filter" -> geometricMeanFilter(it, ksize.toInt())
-                            "Harmonic Mean Filter" -> harmonicMeanFilter(it, ksize.toInt())
-                            "Contraharmonic Mean Filter" -> contraharmonicMeanFilter(it, ksize.toInt(), qValue.toDouble())
-                            "Histogram Equalization" -> applyHistogramEqualization(it)
-                            "Contrast Stretching" -> applyContrastStretching(it, threshold1.toDouble(), thresholdValue.toDouble(), threshold2.toDouble(), adaptiveC * 255.0)
-                            "Dịch ảnh (Translation)" -> translateImage(it)
-                            "Xoay ảnh (Rotation)" -> rotateImage(it, rotationAngle.toDouble())
-                            "Co dãn ảnh (Scaling)" -> scaleImage(it)
-                            "Lật ảnh (Flipping)" -> flipImage(it)
-                            "Cắt ảnh (Cropping)" -> cropImage(it, cropStartX.toInt(), cropStartY.toInt(), cropWidth.toInt(), cropHeight.toInt())
-                            "Tách kênh màu (Split Channels)" -> it
-                            else -> it
+                LaunchedEffect(
+                    selectedFunction,
+                    matSrc,
+                    d0,
+                    nValue,
+                    rotationAngle,
+                    cropStartX,
+                    cropStartY,
+                    cropWidth,
+                    cropHeight,
+                    thresholdValue,
+                    threshold1,
+                    threshold2,
+                    adaptiveKsize,
+                    adaptiveC,
+                    adaptiveMethod
+                ) {
+                    matSrc?.let { src ->
+                        if (selectedFunction == "Automatic Document Scanner") {
+                            isLoading = true
+                            coroutineScope.launch(Dispatchers.Default) {
+                                try {
+                                    val processed = scanDocument(src)
+                                    val resultBitmap = matToBitmap(processed)
+                                    withContext(Dispatchers.Main) {
+                                        bitmap = resultBitmap
+                                        isLoading = false
+                                    }
+                                } catch (e: Exception) {
+                                    Log.e("OpenCV", "Error in scanDocument: ${e.message}")
+                                    withContext(Dispatchers.Main) {
+                                        isLoading = false
+                                        snackbarMessage = "Error processing document"
+                                    }
+                                }
+                            }
+                        } else {
+                            val processed = when (selectedFunction) {
+                                "Ảnh gốc (Original Image)" -> src
+                                "Simple Thresholding" -> applyGlobalThreshold(src, thresholdValue.toDouble())
+                                "Simple Thresholding (Inverse)" -> applyGlobalThreshold(src, thresholdValue.toDouble(), true)
+                                "Adaptive Thresholding" -> applyAdaptiveThreshold(src, adaptiveMethod, adaptiveKsize.toInt(), adaptiveC.toInt())
+                                "Otsu Thresholding" -> applyOtsuThreshold(src)
+                                "Sobel Filter" -> applySobelFilter(src)
+                                "Laplacian Filter" -> applyLaplacianFilter(src)
+                                "Canny Edge Detection" -> applyCannyEdgeDetection(src, threshold1.toDouble(), threshold2.toDouble())
+                                "Draw Contours" -> drawContours(src, threshold1.toDouble(), threshold2.toDouble())
+                                "Number Contours" -> numberContours(src, threshold1.toDouble(), threshold2.toDouble())
+                                "Contour Areas" -> contourAreas(src, threshold1.toDouble(), threshold2.toDouble())
+                                "Bounding Boxes" -> drawBoundingBoxes(src, threshold1.toDouble(), threshold2.toDouble())
+                                "Ideal Lowpass Filter (ILPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), false, "ideal"))
+                                "Butterworth Lowpass Filter (BLPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), false, "butterworth", nValue.toDouble()))
+                                "Gaussian Lowpass Filter (GLPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), false, "gaussian"))
+                                "Ideal Highpass Filter (IHPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), true, "ideal"))
+                                "Butterworth Highpass Filter (BHPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), true, "butterworth", nValue.toDouble()))
+                                "Gaussian Highpass Filter (GHPF)" -> applyFrequencyFilter(src, createDistanceFilter(Core.getOptimalDFTSize(src.rows() * 2), Core.getOptimalDFTSize(src.cols() * 2), d0.toDouble(), true, "gaussian"))
+                                "Gaussian Noise" -> addGaussianNoise(src, d0.toDouble())
+                                "Salt & Pepper Noise" -> addSaltPepperNoise(src, d0 / 100.0)
+                                "Rayleigh Noise" -> addRayleighNoise(src, d0.toDouble())
+                                "Erlang Noise" -> addErlangNoise(src, 2, d0.toDouble())
+                                "Exponential Noise" -> addExponentialNoise(src, d0.toDouble())
+                                "Uniform Noise" -> addUniformNoise(src, 0.0, d0.toDouble())
+                                "Arithmetic Mean Filter" -> arithmeticMeanFilter(src, ksize.toInt())
+                                "Geometric Mean Filter" -> geometricMeanFilter(src, ksize.toInt())
+                                "Harmonic Mean Filter" -> harmonicMeanFilter(src, ksize.toInt())
+                                "Contraharmonic Mean Filter" -> contraharmonicMeanFilter(src, ksize.toInt(), qValue.toDouble())
+                                "Histogram Equalization" -> applyHistogramEqualization(src)
+                                "Contrast Stretching" -> applyContrastStretching(src, threshold1.toDouble(), thresholdValue.toDouble(), threshold2.toDouble(), adaptiveC * 255.0)
+                                "Dịch ảnh (Translation)" -> translateImage(src)
+                                "Xoay ảnh (Rotation)" -> rotateImage(src, rotationAngle.toDouble())
+                                "Co dãn ảnh (Scaling)" -> scaleImage(src)
+                                "Lật ảnh (Flipping)" -> flipImage(src)
+                                "Cắt ảnh (Cropping)" -> cropImage(src, cropStartX.toInt(), cropStartY.toInt(), cropWidth.toInt(), cropHeight.toInt())
+                                "Tách kênh màu (Split Channels)" -> src
+                                else -> src
+                            }
+                            bitmap = matToBitmap(processed)
+                            showSplit = selectedFunction == "Tách kênh màu (Split Channels)"
                         }
-                        bitmap = matToBitmap(processed)
-                        showSplit = selectedFunction == "Tách kênh màu (Split Channels)"
                     }
                 }
 
@@ -717,13 +952,32 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     floatingActionButton = {
-                        FloatingActionButton(
-                            onClick = { launcher.launch("image/*") },
-                            containerColor = MaterialTheme.colorScheme.secondary,
-                            contentColor = MaterialTheme.colorScheme.onSecondary,
-                            modifier = Modifier.shadow(8.dp, RoundedCornerShape(16.dp))
+                        Row(
+                            modifier = Modifier
+                                .padding(end = 16.dp, bottom = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text("Chọn ảnh", fontWeight = FontWeight.Medium)
+                            FloatingActionButton(
+                                onClick = { launcher.launch("image/*") },
+                                containerColor = MaterialTheme.colorScheme.secondary
+                            ) {
+                                Text("Chọn ảnh")
+                            }
+
+                            FloatingActionButton(
+                                onClick = { takePicture() },
+                                containerColor = MaterialTheme.colorScheme.tertiary
+                            ) {
+                                Text("Chụp")
+                            }
+                            FloatingActionButton(
+                                onClick = {
+                                    bitmap?.let { savePdfToDownloads(context, it) }
+                                },
+                                containerColor = MaterialTheme.colorScheme.primary
+                            ) {
+                                Text("Xuất PDF")
+                            }
                         }
                     },
                     snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -790,7 +1044,8 @@ class MainActivity : ComponentActivity() {
                                     "Co dãn ảnh (Scaling)",
                                     "Lật ảnh (Flipping)",
                                     "Cắt ảnh (Cropping)",
-                                    "Tách kênh màu (Split Channels)"
+                                    "Tách kênh màu (Split Channels)",
+                                    "Automatic Document Scanner"
                                 )
 
                                 var expanded by remember { mutableStateOf(false) }
@@ -898,15 +1153,31 @@ class MainActivity : ComponentActivity() {
                                             }
                                         }
                                     } else {
-                                        Image(
-                                            bitmap = bitmap!!.asImageBitmap(),
-                                            contentDescription = null,
+                                        Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
                                                 .height(400.dp)
                                                 .clip(RoundedCornerShape(8.dp))
-                                                .background(Color.Black.copy(alpha = 0.1f))
-                                        )
+                                                .background(Color.Black.copy(alpha = 0.1f)),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isLoading) {
+                                                CircularProgressIndicator(
+                                                    color = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(48.dp)
+                                                )
+                                            } else {
+                                                bitmap?.let {
+                                                    Image(
+                                                        bitmap = it.asImageBitmap(),
+                                                        contentDescription = null,
+                                                        modifier = Modifier
+                                                            .fillMaxWidth()
+                                                            .height(400.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1084,16 +1355,15 @@ class MainActivity : ComponentActivity() {
                                                 valueRange = 1f..10f
                                             )
                                         }
+                                    }
 
-
-                                        if (selectedFunction.contains("Noise")) {
-                                            SliderWithLabel(
-                                                label = "Tham số: ${d0.toInt()}",
-                                                value = d0,
-                                                onValueChange = { d0 = it },
-                                                valueRange = 1f..100f
-                                            )
-                                        }
+                                    if (selectedFunction.contains("Noise")) {
+                                        SliderWithLabel(
+                                            label = "Tham số: ${d0.toInt()}",
+                                            value = d0,
+                                            onValueChange = { d0 = it },
+                                            valueRange = 1f..100f
+                                        )
                                     }
                                 }
                             }
@@ -1131,4 +1401,4 @@ class MainActivity : ComponentActivity() {
             )
         }
     }
-    }
+}
